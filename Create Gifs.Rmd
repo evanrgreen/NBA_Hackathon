@@ -1,0 +1,151 @@
+---
+title: "Create Gifs"
+output: html_document
+---
+
+```{r echo=FALSE}
+
+calcDist <- function(x1, y1, x2, y2){
+  return(sqrt((x1 - x2)^2 + (y1 - y2)^2))
+}
+
+```
+
+
+```{r echo=FALSE}
+
+merged <- read.csv("Hackathon_sv_merged_short.txt",sep=",",as.is=T,check.names = F)
+
+```
+
+
+```{r echo=FALSE}
+# xrange 0-94
+# yrange 0-50
+# draw lines between playerIDs
+
+# diff color & shape for offense vs defense 
+getCol <- function(playerID, row){
+  return (which(apply(merged[row,], 2, function(x) any (grepl(playerID, x)))))
+}
+
+library(jpeg)
+court <- readJPEG("cropped.jpg")
+drawPlot <- function(image = court){
+  kLengthOfCourt <- 94
+  kWidthOfCourt <- 50
+  par(mar=c(0,0,0,0))
+  plot(c(0,kLengthOfCourt),c(0,kWidthOfCourt),
+       type="n",xlab="",ylab="",xaxt="n",yaxt="n")
+  rasterImage(image, 0, 0, kLengthOfCourt, kWidthOfCourt,xaxt="n")
+}
+
+drawPoints <- function(row){
+  xCoords <- merged[row,paste("P",1:10,"X",sep="")]
+  yCoords <- merged[row,paste("P",1:10,"Y",sep="")]
+  ## make shape vector by team affiliation
+  # triangle = offense (17) = black
+  # square = defense (15) = blue
+  
+  teamIDs <- unique(merged[row,range(52,61)])
+  offenseTeamID <- merged[row, "POS_TEAM_ID"]
+  defenseTeamID <- setdiff(teamIDs, offenseTeamID)
+  shapes <- c()
+  colors <- c()
+  for(player in 1:10){
+    colName <- paste("Player", player, "Team", sep="")
+    if(merged[row,colName] == offenseTeamID){
+      shapes <- c(shapes, 17)
+      colors <- c(colors, "black")
+    }
+    else{# team on defense
+      shapes <- c(shapes, 15)
+      colors <- c(colors, "blue")
+    }
+  }
+  points(x = xCoords, 
+         y = yCoords,
+         pch = shapes, cex = 1.5, col = colors)
+}
+
+calcDist <- function(x1, y1, x2, y2){
+  # added .001 to prevent square root of 0
+  return(sqrt((as.numeric(x1) - as.numeric(x2))^2 + 
+                (as.numeric(y1) - as.numeric(y2))^2) + .001)
+}
+
+drawLine <- function(p1x, p1y, p2x, p2y, row, pal){
+  dist <- calcDist(p1x, p1y, p2x, p2y)
+  col <- pal(8)[min((dist %/% 1.5) + 1, 8)]
+  
+  lines(x = c(p1x, p2x), y = c(p1y, p2y),
+        col = col, lwd = 3)
+}
+
+drawAllLines <- function(row){
+  ## This calls the "drawLine" function for every offense/defense pair.
+  ## First, it draws the plotting frame. 
+  drawPlot()
+  
+  ## color lines by distance
+  ## green = close, red = far
+  pal <- colorRampPalette(c("green", "yellow", "red"))
+  
+  # visualizing the palette
+  # plot(rep(1,8), col=pal(8), pch=19, cex=3)
+  
+  for(i in seq(from = which(colnames(merged)=="P1_CLOSEST_DEF_ID"), by=2, length.out=10)){
+    if(merged[row, i] == "n/a") next # no defender matched to player
+    else{
+      pID1 <- merged[row, i]
+      p1Num <- names(getCol(pID1,row))[1] # getting "Player_.1" or "PlayerID1"
+      if(p1Num == "PlayerID1"){
+        p1Num <- 1
+      }
+      else{
+        if(p1Num == "Player10.1"){
+          p1Num<-10
+        }else{
+          p1Num <- substring(p1Num, 7) # removing "Player" (which is seven letters)
+          p1Num <- substring(p1Num, 1, 1) # keeping first element (player number)
+        }
+      }
+      p1x <- merged[row, paste("P", p1Num, "X", sep="")]
+      p1y <- merged[row, paste("P", p1Num, "Y", sep="")]
+       
+      p2Num <- gsub("_.*$", "", colnames(merged)[i])
+      p2x <- merged[row, paste(p2Num, "X", sep="")]
+      p2y <- merged[row, paste(p2Num, "Y", sep="")]
+      
+      drawLine(p1x, p1y, p2x, p2y, row, pal)
+    }
+  }
+}
+
+drawBall <- function(row){
+  # x-coordinate = BX
+  # y-coordiante = YB
+   points(x = merged[row,"BX"], 
+         y = merged[row,"YB"],
+         pch = 19, cex = 1.8, col = rgb(.8, .33, 0))
+}
+
+drawEverything <-function(row){
+  drawAllLines(row)
+  drawPoints(row)
+  drawBall(row)
+}
+
+playID<-241146
+library(animation)
+saveGIF({
+  ani.options(interval = 0.04)
+  rows <- which(merged$POS_ID==241146)
+  nRows <- length(rows)
+  rows<-c(rows, (rows[(nRows-6):nRows]+7))
+  for(row in 400:700){
+    drawEverything(row)
+  }
+}, movie.name="made3.gif", ani.width=94 * 8, ani.height=50 * 8)
+
+```

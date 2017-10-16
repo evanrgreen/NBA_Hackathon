@@ -1,0 +1,229 @@
+---
+title: "NBA_Hackathon_2016"
+runtime: shiny
+output: html_document
+author: "Kira Tebbe, Evan Green, Michael Menz, Luke Benz"
+
+---
+# Motivation:
+
+Due to the advances in SportsVU, there are new opportunities to analyze how players interact spatially on the basketball court. In particular, this data allows for analysis of defensive quality. Unfortunately, up to this point most applications of defensive analysis using SportsVU data has primarily examined on-ball defense. These studies have been numerous and useful.   As any basketball fan knows, however, much of the game’s action takes place off the ball. We seek to fill this void with our answer to Prompt 1. 
+
+One simple way to quantify how effectively a defender is guarding his assigned offensive player is to look at how far away he is from the offensive player. We propose a new metric, Total Defensive Pressure (TDP), computed by taking the mean of sum of squares of the distance from each offensive player to his closest defender. The mean is to standardize across possession length.  We will demonstrate that this metric is correlated with defensive success and enables looking at players’ defensive tendencies in a more granular manner. Note that because Total Defensive pressure is the sum of squared distances to defensive players, a lower number refers to tighter defense. 
+
+# Methods:
+
+We use the SportsVU, possessions, and shots data in our analysis. This required us to link data across these files, including locating the closest defender to each offender and the ball during a possession. In order to make analysis more feasible, we down-sampled from 25 data points per second to 5 data points per second.  We take the square of the distances because as you get increasingly far away from an offensive player the chance that that player scores goes up as it heavily weights players being wide open. This also rewards very good defense. We test other methods of calculating TDP and found that the mean of sum of squares produced the highest correlations. Again, the mean is to standardize across possession length. In order to avoid calculating distance when the offensive team is bringing up the ball, we only starting summing the distances when all players have crossed half court.  
+
+# Visual: 
+
+Below is a gif visualization from a play from the SportsVU data. This gif was selected to illustrate the distances involved in calculating Total Defensive Pressure and to give intuition into how it works. The lines connect offensive players (represented by black triangles) to the closest defender (represented by blue squares). These lines are colored based on how close the defender is. Red represents low defensive pressure and corresponds to longer distances between defenders. 
+
+### GIF
+
+
+<IMG SRC="https://media.giphy.com/media/l0MYuXNXDujN0j6AE/giphy.gif">
+
+
+```{r echo=FALSE}
+#![](https://media.giphy.com/media/l0MYuXNXDujN0j6AE/giphy.gif)
+#setwd("~/Desktop/Hackathon Submission")
+library(shiny)
+library(data.table)
+
+## Reading in our files
+merged <- fread("final_merge.txt", sep=",",na.strings = c("NULL","NA"),
+                verbose = F,showProgress = F)
+avgs <- read.csv("ball_averages.csv", as.is=TRUE)
+
+## This finds the list possession IDs that scored a certain number of points 
+findPosID <- function(points){
+  return(unique(merged[POS_POINTS == points, POS_ID]))
+}
+
+## Find the IDs of possessions that earned 0, 2, and 3 points and subset the data frame
+ID0 <- findPosID(0)
+ID2 <- findPosID(2)
+ID3 <- findPosID(3)
+merged0 <- merged[merged$POS_ID %in% ID0, ]
+merged2 <- merged[merged$POS_ID %in% ID2, ]
+merged3 <- merged[merged$POS_ID %in% ID3, ]
+
+# Define missed 2 pointers as less than 23 feet from basket
+mergedMissed2 <- merged0[merged0$SHOT_DIST <= 23, ]
+mergedMissed3 <- merged0[merged0$SHOT_DIST > 23, ]
+
+## Limit possessions to just active movement
+merged0Active <- merged0[ACTIVE == T]
+mergedMissed2Active <- mergedMissed2[ACTIVE == T]
+mergedMissed3Active <- mergedMissed2[ACTIVE == T]
+
+merged2Active <- merged2[ACTIVE == T]
+merged3Active <- merged3[ACTIVE == T]
+
+## Calculating ball handler -> closest defender distance (squared)
+merged2Active[,SQUARE_BALL_DEF_DIST :=  BALL_DEF_DIST^2]
+merged3Active[,SQUARE_BALL_DEF_DIST :=  BALL_DEF_DIST^2]
+
+mergedMissed2Active[,SQUARE_BALL_DEF_DIST :=  BALL_DEF_DIST^2]
+mergedMissed3Active[,SQUARE_BALL_DEF_DIST :=  BALL_DEF_DIST^2]
+
+
+## Looking at all defenders NOT on ballhandler
+## (squaring because stored as simple sum)
+mergedMissed2Active[,OFF_BALL_DIST :=  SQUARE_SUM - BALL_DEF_DIST ** 2]
+mergedMissed3Active[,OFF_BALL_DIST :=  SQUARE_SUM - BALL_DEF_DIST ** 2]
+
+merged2Active[,OFF_BALL_DIST :=  SQUARE_SUM - BALL_DEF_DIST ** 2]
+merged3Active[,OFF_BALL_DIST :=  SQUARE_SUM - BALL_DEF_DIST ** 2]
+
+
+```
+
+
+# Results: 
+
+Once we created our Total Defensive Pressure (TDP) stat, we explored how this stat increases understanding of defensive strategy. One thing that we looked at was how TDP differed in made and missed Two Point Shots and Three Point Shots. As you can see in the interactive Shiny application below, for both types of missed shots, TDP was lower, which means that defense was closer to the offensive players. However, if you go to just on the ball defense, you can see there is essentially no difference. This demonstrates that the importance of looking at off-the-ball defense and all the context that is lost by focusing on the ball. Additionally, three-point shot attempts, whether made or missed, have more space than two-point shots. This suggests that three point shot attempts require more space. 
+
+```{r echo=FALSE}
+shinyApp(
+  ui = fluidPage(
+    selectInput("stat", "Defense Subset:", 
+                choices = c("Overall",
+                            "On the ball",
+                            "Off the ball"),
+                selected = "Overall"),
+    plotOutput("barplot")
+  ),
+  
+  server = function(input, output) {
+    output$barplot <- renderPlot({
+      tab <- matrix(NA, ncol=2, nrow=2)
+      rownames(tab) <- c("Made", "Missed")
+      colnames(tab) <- c("Two Pointer", "Three Pointer")
+      if(input$stat == "Overall"){
+        tab[,1] <- c(mean(merged2Active$SQUARE_SUM),
+                     mean(mergedMissed2Active$SQUARE_SUM, na.rm=T))
+        tab[,2] <- c(mean(merged3Active$SQUARE_SUM),
+                     mean(mergedMissed3Active$SQUARE_SUM, na.rm=T))
+        barplot(tab, col = c("darkgreen", "darkred"),
+                ylab = "Average Closest (Squared) Distance to Defender", 
+                beside = TRUE, ylim = c(0, 1000),
+                main = "Average Overall Defender Distance")
+        abline(h = mean(merged2Active$SQUARE_SUM))
+        text("Made", x = 1.5, y = 80, col = "white")
+        text("Missed", x = 2.5, y = 80, col = "white")
+        text("Made", x = 4.5, y = 80, col = "white")
+        text("Missed", x = 5.5, y = 80, col = "white")
+      }
+      else if (input$stat == "On the ball"){
+        ## same plot for just on the ball
+        tab <- matrix(NA, ncol=2, nrow=2)
+        rownames(tab) <- c("Made", "Missed")
+        colnames(tab) <- c("Two Pointer", "Three Pointer")
+        tab[,1] <- c(mean(merged2Active$SQUARE_BALL_DEF_DIST),
+                     mean(mergedMissed2Active$SQUARE_BALL_DEF_DIST, na.rm=T))
+        tab[,2] <- c(mean(merged3Active$SQUARE_BALL_DEF_DIST),
+                     mean(mergedMissed3Active$SQUARE_BALL_DEF_DIST, na.rm=T))
+        barplot(tab, col = c("darkgreen", "darkred"),
+                ylab = "Average Closest (Squared) Distance to Defender", 
+                beside = TRUE, ylim = c(0, 225),
+                main = "Average On The Ball Defender Distance")
+        abline(h = mean(mergedMissed2Active$SQUARE_BALL_DEF_DIST))
+        text("Made", x = 1.5, y = 20, col = "white")
+        text("Missed", x = 2.5, y = 20, col = "white")
+        text("Made", x = 4.5, y = 20, col = "white")
+        text("Missed", x = 5.5, y = 20, col = "white")
+      }
+      else{
+        tab <- matrix(NA, ncol=2, nrow=2)
+        rownames(tab) <- c("Made", "Missed")
+        colnames(tab) <- c("Two Pointer", "Three Pointer")
+        tab[,1] <- c(mean(merged2Active$OFF_BALL_DIST),
+                     mean(mergedMissed2Active$OFF_BALL_DIST, na.rm=T))
+        tab[,2] <- c(mean(merged3Active$OFF_BALL_DIST),
+                     mean(mergedMissed3Active$OFF_BALL_DIST, na.rm=T))
+        barplot(tab, col = c("darkgreen", "darkred"),
+                ylab = "Average Closest (Squared) Distance to Defender", 
+                beside = TRUE, ylim = c(0,800),
+                main = "Average Off The Ball Defender Distance")
+        abline(h = mean(merged2Active$OFF_BALL_DIST))
+        text("Made", x = 1.5, y = 50, col = "white")
+        text("Missed", x = 2.5, y = 50, col = "white")
+        text("Made", x = 4.5, y = 50, col = "white")
+        text("Missed", x = 5.5, y = 50, col = "white")
+      }
+    })
+  },
+  
+  options = list(height = 500)
+)
+
+```
+
+We also investigated how individual players tend to guard players both on and off the ball.  Players are taught to play on-the-ball defense just as intently as off-the-ball defense. Looking at these splits via Total Defensive Pressures enables us to see who is listening. Players who are similar in both on-ball and off-ball defense are players that are focused defenders regardless of the situation. Two players that stand out in this are Lebron James and Kawhi Leonard; both of whom are regarded as top defenders. The application can be explored using the two drop-down menus. 
+
+```{r echo=FALSE}
+shinyApp(
+  ui = fluidPage(
+    uiOutput("team"),
+    uiOutput("player"),
+    plotOutput("avgPlot")
+  ),
+  
+  server = function(input, output) {
+    ## The sorted list of teams in the league
+    output$team <- renderUI({
+      selectInput("team", "Team:", 
+                  choices = sort(unique(avgs$Team)),
+                  selected = "Cleveland Cavaliers")
+    })
+    ## The players on the team that is selected (see above)
+    output$player <- renderUI({
+      selectInput("player", "Player:", 
+                  choices = avgs$Name[which(avgs$Team == input$team)],
+                  selected = avgs$Name[which(avgs$Team == input$team)][1])
+    })
+    
+    ## The barplot that shows the average defensive positioning of each player on & off ball
+    output$avgPlot <- renderPlot({
+      playerName <- input$player
+      tab <- matrix(NA, ncol=1, nrow=2)
+      colnames(tab) <- c(playerName)
+      rownames(tab) <- c("On Ball", "Off Ball")
+      row <- which(avgs$Name == playerName)
+      if(length(row)==0){
+        row <- 1 
+      }
+      tab[,1] <- c(avgs$on_ball[row], avgs$off_ball[row])
+      barplot(tab, main = paste("Defensive Positioning of ", playerName, sep = ""),
+              ylab = "Average (Squared) Distance to Guarded Player", 
+              xlab = " ",
+              ylim = c(0,610), col = c("orange", "grey"), beside = TRUE)
+      
+      text("On Ball", x = 1.5, y = 30, col = "black")
+      text("Off Ball", x = 2.5, y = 30, col = "black")
+      
+    })
+  },
+  
+  options = list(height = 600)
+)
+
+```
+
+# Further Research:
+
+Moving forward, there are a wealth of situations in which to examine the relevance of total defensive pressure. These include how total defensive pressure changes over the course of a game, whether different positions apply different levels of defensive pressure, and (although it could not be done with the available data) whether total defensive pressure is different during the regular season versus the post season. We hope that our results motivate further research in regards to the importance of off-the-ball defense.
+
+
+
+
+
+
+
+
+
+
+
+
